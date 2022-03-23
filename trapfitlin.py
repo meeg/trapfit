@@ -25,7 +25,7 @@ from ROOT import TF1
 np.set_printoptions(linewidth=200)
 
 hdus = [2,3]
-degrees = range(1,4)
+degrees = range(1,15)
 
 data = {}
 for q in hdus:
@@ -116,11 +116,15 @@ def linFit(dataTuple, deltat, maxdeg):
     return bestfit, cov, chi2, rchi2
 
 nplot = 200
+zeroArr = array.array('d',[0]*nplot)
+f0 = TF1("pol0","0",0,1.0)
 
+linfits = defaultdict(list)
 linpols = defaultdict(list)
 linpolgraphs = defaultdict(list)
-for maxdeg in degrees:
-    for iHdu, q in enumerate(hdus):
+yErrArrs = defaultdict(list)
+for iHdu, q in enumerate(hdus):
+    for maxdeg in degrees:
         bestfit, cov, chi2, rchi2 = linFit(data[q], initialpars[q][1], maxdeg)
         print("chi2 %f, reduced chi2 %f, params %s" % (chi2, rchi2, str(bestfit)))
 
@@ -128,6 +132,7 @@ for maxdeg in degrees:
         # (this is equivalent to fixing it at its best-fit value)
         bestfit = bestfit[1:]
         cov = cov[1:,1:]
+        linfits[q].append((bestfit,cov))
 
         newpol = TF1("linpol%d_%d"%(maxdeg,q),"pol%d(0)"%(maxdeg),0,1.0)
         newpol.SetParameters(array.array('d',bestfit))
@@ -137,11 +142,11 @@ for maxdeg in degrees:
         eArr = array.array('d',np.linspace(0.0,1.0,nplot))
         yErrArr = array.array('d')
         yArr = array.array('d')
-        zeroArr = array.array('d',[0]*nplot)
         for iE, E in enumerate(eArr):
             yArr.append(density(E))
             coeffVec = np.power(E, np.arange(maxdeg+1))
             yErrArr.append(np.matmul(np.matmul(coeffVec, cov), coeffVec))
+        yErrArrs[q].append(yErrArr)
         grcov = TGraphErrors(nplot, eArr, yArr, zeroArr, yErrArr)
         linpolgraphs[q].append(grcov)
 
@@ -162,6 +167,35 @@ for q in hdus:
         grcov.SetFillStyle(3005)
         grcov.Draw("3")
     c.Print(outfilename+".pdf")
+
+for q in hdus:
+    for iDeg in range(len(degrees)-1):
+        prevfit,cov = linfits[q][iDeg]
+        thisfit,nextcov = linfits[q][iDeg+1]
+        degree = degrees[iDeg+1]
+
+        deltafit = thisfit.copy()
+        deltafit[:len(prevfit)] -= prevfit
+        deltapol = TF1("deltapol%d_%d"%(degree,q),"pol%d(0)"%(degree),0,1.0)
+        deltapol.SetParameters(array.array('d',deltafit))
+        yArr = array.array('d', [deltapol.Eval(e) for e in eArr])
+
+        prevgr = TGraphErrors(nplot, eArr, zeroArr, zeroArr, yErrArrs[q][iDeg])
+        thisgr = TGraphErrors(nplot, eArr, yArr, zeroArr, yErrArrs[q][iDeg+1])
+        deltapol.Draw()
+        f0.Draw("same")
+        f0.SetLineColor(2)
+        deltapol.SetLineColor(4)
+        prevgr.Draw("same3")
+        thisgr.Draw("same3")
+        thisgr.SetFillColor(4)
+        thisgr.SetFillStyle(3005)
+        prevgr.SetFillColor(2)
+        prevgr.SetFillStyle(3004)
+        deltapol.GetXaxis().SetRangeUser(0.35,0.65)
+        deltapol.GetYaxis().SetRangeUser(-10,10)
+        c.Print(outfilename+".pdf")
+
 
 c.Print(outfilename+".pdf]")
 outfile.Write()
