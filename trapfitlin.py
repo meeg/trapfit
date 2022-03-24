@@ -18,14 +18,18 @@ from ROOT import gStyle
 from ROOT import TFile
 from ROOT import TTree
 from ROOT import TCanvas
-from ROOT import TGraphErrors
+from ROOT import TGraphErrors, TGraph
 from ROOT import gPad
 from ROOT import TF1
 
 np.set_printoptions(linewidth=200)
 
+os.system("gcc -shared -fPIC -o trapfit.so trapfit.c")
+
 hdus = [2,3]
 degrees = range(1,15)
+
+objects = [] #we don't use this, but it prevents the histograms from getting garbage-collected
 
 data = {}
 for q in hdus:
@@ -77,7 +81,12 @@ lib.single_integrand.restype = ctypes.c_double
 lib.single_integrand.argtypes = (ctypes.c_int, ctypes.POINTER(ctypes.c_double))
 componentfunc = LowLevelCallable(lib.single_integrand)
 def dc_component(t_arr, deltat, degree):
-    y = [86400*integrate.quad(componentfunc, 0.0, 1.0, args=(t-deltat, degree))[0] for t in t_arr]
+    # epsabs is 1.49e-8 by default - that's the max error of the integral
+    # within the limit set by epsabs, the integrator sometimes randomly gets lazy:
+    # you can get weird discontinuous values for very specific values of t
+    # you'll see weird spikes on the fitted DC vs. t curve
+    # be careful that the poly coefficients don't get so large that this matters
+    y = np.array([integrate.quad(componentfunc, 0.0, 1.0, args=(t-deltat, degree))[0] for t in t_arr])
     return y
 
 #from minuit pol1 fit
@@ -91,6 +100,7 @@ for iHdu, q in enumerate(hdus):
     deltat =  initialpars[q][1]
     for degree in range(max(degrees)+1):
         components[q].append(dc_component(t_arr, deltat, degree))
+        #print(np.max(components[q][-1][1:] - components[q][-1][:-1]))
 
 def linFit(dataTuple, deltat, maxdeg):
     t_arr, r_arr, rErr_arr = dataTuple
@@ -113,20 +123,25 @@ def linFit(dataTuple, deltat, maxdeg):
     bestfit = np.matmul(np.matmul(cov, Aw.T), Bw)
     chi2 = np.power(linalg.norm(np.matmul(Aw, bestfit) - Bw),2)
     rchi2 = chi2/(len(B) - len(bestfit))
-    return bestfit, cov, chi2, rchi2
+    fitfunc = np.matmul(A, bestfit)
+    resids = Bw - np.matmul(Aw, bestfit)
+    return bestfit, cov, chi2, rchi2, fitfunc, resids
+
 
 nplot = 200
 zeroArr = array.array('d',[0]*nplot)
-f0 = TF1("pol0","0",0,1.0)
+f0 = TF1("pol0","0",0,1e7)
 
 linfits = defaultdict(list)
 linpols = defaultdict(list)
 linpolgraphs = defaultdict(list)
+fitresults = defaultdict(list)
 yErrArrs = defaultdict(list)
 for iHdu, q in enumerate(hdus):
     for maxdeg in degrees:
-        bestfit, cov, chi2, rchi2 = linFit(data[q], initialpars[q][1], maxdeg)
+        bestfit, cov, chi2, rchi2, fitfunc, resids = linFit(data[q], initialpars[q][1], maxdeg)
         print("chi2 %f, reduced chi2 %f, params %s" % (chi2, rchi2, str(bestfit)))
+        fitresults[q].append((fitfunc,resids))
 
         # drop dc_eq from the polynomial parameters and the covariance matrix
         # (this is equivalent to fixing it at its best-fit value)
@@ -195,6 +210,41 @@ for q in hdus:
         deltapol.GetXaxis().SetRangeUser(0.35,0.65)
         deltapol.GetYaxis().SetRangeUser(-10,10)
         c.Print(outfilename+".pdf")
+
+c.Clear()
+c.Divide(1,4)
+for iHdu, q in enumerate(hdus):
+    iDeg = len(degrees)-1
+    bestfit = linfits[q][iDeg]
+    fitfunc, resids = fitresults[q][iDeg]
+    t_arr, r_arr, rErr_arr = data[q]
+    zero_arr = array.array('d',[0]*len(t_arr))
+    one_arr = array.array('d',[1]*len(t_arr))
+
+    grdata = TGraphErrors(len(t_arr), t_arr, r_arr, zero_arr, rErr_arr)
+    grfit = TGraph(len(t_arr), t_arr, array.array('d', fitfunc))
+    objects.append(grdata)
+    objects.append(grfit)
+
+    c.cd(1 + iHdu*2)
+    gPad.SetLogy(1)
+    gPad.SetLogx(1)
+    grdata.Draw("A*")
+    grfit.Draw("C")
+    grfit.SetLineColor(2)
+    c.cd(2 + iHdu*2)
+    gPad.SetLogx(1)
+    grresid = TGraphErrors(len(t_arr), t_arr, array.array('d', resids), zero_arr, one_arr)
+    objects.append(grresid)
+    grresid.Draw("A*")
+    #grresid.GetYaxis().SetRangeUser(-1,1)
+    f0.SetLineColor(2)
+    #f0_clone = f0.Clone()
+    #objects.append(f0_clone)
+    f0.DrawCopy("lsame")
+c.cd()
+c.Print(outfilename+".pdf")
+
 
 
 c.Print(outfilename+".pdf]")

@@ -22,6 +22,8 @@ from ROOT import TGraphErrors
 from ROOT import gPad
 from ROOT import TF1
 
+os.system("gcc -shared -fPIC -o trapfit.so trapfit.c")
+
 hdus = [2,3]
 data = {}
 for q in hdus:
@@ -104,7 +106,7 @@ def dc_polX(degree):
         dc_eq = p[0]
 
         y,err = integrate.quad(func, 0.0, 1.0, args=(x[0], *p_arr[1:]))
-        return 86400*y + dc_eq
+        return y + dc_eq
     return dc_fitfunc
 
 

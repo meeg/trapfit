@@ -20,7 +20,7 @@ double dc_integrand(int n, double *x) {
     double prefactor = 1.6e6; // 1.6e21 * 1e-15
 
     double decayrate = prefactor * pow(temp,2) * exp(-E/kt); // s^-1
-    return density * decayrate * exp((dt-t) * decayrate);
+    return 86400 * density * decayrate * exp((dt-t) * decayrate);
 }
 
 double single_integrand(int n, double *x) {
@@ -31,8 +31,8 @@ double single_integrand(int n, double *x) {
     double density = pow(E, degree);
     double temp = 170; // K
     double kt = 8.62e-5 * temp; // eV
-    double prefactor = 1.6e6; // 1.6e21 * 1e-15
+    double prefactor = 1e-15 * 1.6e21;
 
     double decayrate = prefactor * pow(temp,2) * exp(-E/kt); // s^-1
-    return density * decayrate * exp(-t * decayrate);
+    return 86400 * density * decayrate * exp(-t * decayrate);
 }
