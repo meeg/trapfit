@@ -75,19 +75,58 @@ outfile.cd()
 
 zero = TF1("zero","0",-1e7,1e7)
 
-lib = ctypes.CDLL(os.path.abspath('trapfit.so'))
+def single_integrand_numpy(E, t, degree):
+    """
+    fully vectorized function, for use with fixed_quad
+    """
+    density = np.power(E, degree)
+    temp = 170 # K
+    kt = 8.62e-5 * temp # eV
+    prefactor = 1e-15 * 1.6e21
 
+    decayrate = prefactor * pow(temp,2) * np.exp(-E/kt) # s^-1
+    return 86400 * density * decayrate * np.exp(np.outer(-t, decayrate))
+
+lib = ctypes.CDLL(os.path.abspath('trapfit.so'))
 lib.single_integrand.restype = ctypes.c_double
 lib.single_integrand.argtypes = (ctypes.c_int, ctypes.POINTER(ctypes.c_double))
 componentfunc = LowLevelCallable(lib.single_integrand)
-def dc_component(t_arr, deltat, degree):
+
+#minE, maxE = [0.0, 1.0]
+#minE, maxE = [0.3, 0.7]
+minE, maxE = [0.4, 0.6]
+
+def do_integral_quad(t, degree):
     # epsabs is 1.49e-8 by default - that's the max error of the integral
     # within the limit set by epsabs, the integrator sometimes randomly gets lazy:
     # you can get weird discontinuous values for very specific values of t
     # you'll see weird spikes on the fitted DC vs. t curve
-    # be careful that the poly coefficients don't get so large that this matters
-    y = np.array([integrate.quad(componentfunc, 0.0, 1.0, args=(t-deltat, degree))[0] for t in t_arr])
-    return y
+    # we actually seem to get more stable results by making epsabs relatively large
+
+    return integrate.quad(componentfunc, minE, maxE, args=(t, degree), epsabs=1e-6)
+
+def do_integral_fixed(t, degree):
+    return integrate.fixed_quad(single_integrand_numpy, minE, maxE, args=(t, degree), n=10000)
+    #return integrate.quadrature(single_integrand_numpy, minE, maxE, args=(t, degree))
+
+def dc_component(t_arr, deltat, degree):
+    y = []
+    for t in t_arr:
+        result = do_integral_quad(t-deltat, degree)
+        #print(result[1])
+        y.append(result[0])
+    y = np.array(y)
+    if (np.max(y[1:] - y[:-1])) > 0:
+        # the DC vs. T curve should be monotonically decreasing, so any increase is due to integrator error - print some debug
+        tmax = np.argmax(y[1:] - y[:-1])
+        print(degree, t_arr[tmax], y[tmax], y[tmax+1], y[tmax+1]-y[tmax])
+        print(do_integral_quad(t_arr[tmax]-deltat, degree))
+        print(do_integral_fixed(t_arr[tmax]-deltat, degree))
+        print(do_integral_quad(t_arr[tmax+1]-deltat, degree))
+        print(do_integral_fixed(t_arr[tmax+1]-deltat, degree))
+    return np.array(y)
+
+    #return do_integral_fixed(np.array(t_arr)-deltat, degree)
 
 #from minuit pol1 fit
 initialpars = {}
@@ -100,7 +139,6 @@ for iHdu, q in enumerate(hdus):
     deltat =  initialpars[q][1]
     for degree in range(max(degrees)+1):
         components[q].append(dc_component(t_arr, deltat, degree))
-        #print(np.max(components[q][-1][1:] - components[q][-1][:-1]))
 
 def linFit(dataTuple, deltat, maxdeg):
     t_arr, r_arr, rErr_arr = dataTuple
